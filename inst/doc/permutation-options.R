@@ -1,0 +1,230 @@
+## ---- include = FALSE---------------------------------------------------------
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+
+## ---- echo=FALSE, fig.width=18, fig.height=12, message=FALSE, warning=FALSE----
+library(tidyverse)
+library(cowplot)
+library(gscramble)
+
+
+N <- 12
+L <- 15
+G <- matrix(paste0(1:N, rep(c("a", "b"), each = 12)), nrow = N, ncol = 2 * L)
+
+# make the meta data to go with these
+Im <- tibble(
+  group = rep(c("pop1", "pop2", "pop3"), times = c(5, 4, 3)),
+  indiv = str_c("ind_", 1:N)
+)
+
+Mm <- tibble(
+  chrom = rep(c("1", "2", "3"), times = c(4, 5, 6)),
+) %>%
+  group_by(chrom) %>%
+  mutate(
+    pos = 1500 * 1:n(),
+    variant_id = str_c("marker_", chrom, "_", pos)
+  )
+
+
+
+# turn a matrix with N rows and 2L columns into a tibble
+# that names the individual gene copies
+gmat2tib <- function(M) {
+  if(ncol(M) %% 2 != 0) stop("Must be an even number of columns")
+  L <- ncol(M) / 2
+  N <- nrow(M)
+  
+  tibble(
+    ind = rep(1:N, times = 2 * L),
+    loc = rep(1:L, each = 2 * N),
+    hap = rep(rep(c("a", "b"), each = N), times = L),
+    ind_hap = factor(str_c(ind, hap), levels = paste0(rep(1:N, each = 2), c("a", "b"))),
+    alle = as.vector(M)
+  )
+  
+}
+
+tib <- gmat2tib(G)
+
+chrom_counts <- c(4, 5, 6)
+chrom_edges <- c(0, cumsum(chrom_counts))
+
+# here we define our color palette for these by hand so we can get the
+# first group as blues and greens, the second as reds/pinks and oranges,
+# and the third as browns.
+indiv_colors <- c(
+  "#a6cee3",
+  "#1f78b4",
+  "cyan",
+  "#b2df8a",
+  "#33a02c",
+  "#fb9a99",
+  "#e31a1c",
+  "#fdbf6f",
+  "#ff7f00",
+  "#6a3d9a",
+  "#cab2d6",
+  "purple2"
+)
+
+# now we can plot that.  Let's make a function to do that:
+plot_gmat_tib <- function(tib) {
+  tib %>% 
+    ggplot(aes(x = ind_hap, y = loc)) +
+    geom_raster(aes(fill = factor(as.integer(ind)))) +
+    geom_tile(fill = NA, color = "black", linewidth = 0.05) +
+    geom_text(aes(label = hap)) +
+    geom_vline(xintercept = 0.5 + seq(0, 2*N, by = 2)) +
+    geom_vline(xintercept = 0.5 + 2 * cumsum(c(5, 4, 3)), linewidth = 1.5) +
+    geom_hline(yintercept = 0.5 + chrom_edges, linewidth = 1.5) +
+    geom_hline(yintercept = c(-0.5, max(tib$loc) + 0.5), linewidth = 1.5) +
+    geom_vline(xintercept = c(-0.5, 0.5 + n_distinct(tib$ind_hap)), linewidth = 1.5) +
+    scale_x_discrete(expand = c(0, 0)) +
+    scale_y_discrete(expand = c(0, 0)) +
+    scale_fill_manual(values = indiv_colors) +
+    theme(legend.position = "none") +
+    xlab("Haplotypes in 12 diploids in 3 populations") + 
+    ylab("Loci on three chromosomes")
+}
+
+tib_list <- list()
+
+
+
+# this function rearranges the matrix so that
+# haplotypes are in columns and markers are in rows
+Gr <- rearrange_genos(G, Im, Mm)
+
+# so, we will want to convert that format to a tibble also.
+# this function lets us convert ind and hap back to what they were
+# originally, after setting ind_hap.  This way we can get the colors
+# of the alleles and their original haplotypes that have been permuted into
+#the new positions.
+rearranged_gmat2tib <- function(M, old_hap_and_ind = FALSE) {
+  if(ncol(M) %% 2 != 0) stop("Must be an even number of columns")
+  N <- ncol(M) / 2
+  L <- nrow(M)
+  
+  ret <- tibble(
+    ind = rep(1:N, each = 2 * L),
+    loc = rep(1:L, times = 2 * N),
+    hap = rep(rep(c("a", "b"), each = L), times = N),
+    ind_hap = factor(str_c(ind, hap), levels = paste0(rep(1:N, each = 2), c("a", "b"))),
+    alle = as.vector(M)
+  )
+  
+  if(old_hap_and_ind == TRUE) {
+    ret <- ret %>%
+      select(-hap, -ind) %>%
+      extract(alle, into = c("ind", "hap"), regex = "^([0-9]+)([ab])$", convert = TRUE)
+  }
+
+  ret
+}
+
+# then we could read that in
+tib_list[["Original Samples"]] <- rearranged_gmat2tib(Gr$G[[1]])
+
+
+
+set.seed(5)
+Gs_plain_permute <- perm_gs_by_pops(Gr)
+
+plain_perm <- Gs_plain_permute$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE)
+
+tib_list[["preserve_individuals = FALSE, preserve_haplotypes = FALSE"]] <- plain_perm
+
+
+set.seed(5)
+Gs_hap_permute <- perm_gs_by_pops(Gr, preserve_haplotypes = TRUE)
+
+tib_list[["preserve_individuals = FALSE, preserve_haplotypes = TRUE"]] <- Gs_hap_permute$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE)
+
+
+set.seed(15)
+Gs_hap_permute3 <- perm_gs_by_pops(Gr, preserve_individuals = TRUE)
+
+tib_list[["preserve_individuals = TRUE, preserve_haplotypes = FALSE"]] <- Gs_hap_permute3$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE) 
+
+
+set.seed(21)
+Gs_hap_permute4 <- perm_gs_by_pops(Gr, preserve_individuals = TRUE, preserve_haplotypes = TRUE)
+
+tib_list[["preserve_individuals = TRUE, preserve_haplotypes = TRUE"]] <- Gs_hap_permute4$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE)
+
+
+
+set.seed(21)
+by_chrom_haps_false <- perm_gs_by_pops(Gr, preserve_individuals = "BY_CHROM", preserve_haplotypes = FALSE)
+
+tib_list[["preserve_individuals = \"BY_CHROM\", preserve_haplotypes = FALSE"]] <- by_chrom_haps_false$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE)
+
+
+set.seed(25)
+by_chrom_haps_true <- perm_gs_by_pops(Gr, preserve_individuals = "BY_CHROM", preserve_haplotypes = TRUE)
+
+tib_list[["preserve_individuals = \"BY_CHROM\", preserve_haplotypes = TRUE"]] <- by_chrom_haps_true$G_permed[[1]] %>%
+  rearranged_gmat2tib(old_hap_and_ind = TRUE)
+
+
+# get just the permuted ones and order them so that they come out the the way want
+permed_ones_order <- names(tib_list)[c(2, 6, 4, 3, 7, 5)]
+permed_ones <- bind_rows(tib_list[-1], .id = "option") %>%
+  mutate(option = factor(option, levels = permed_ones_order))
+
+# get the 6 permed ones in facets
+facets6 <- plot_gmat_tib(permed_ones) +
+  facet_wrap(~option, ncol = 3) +
+  theme(
+    axis.text.x = element_text(angle = 90, vjust = 0.5, size = 12), 
+    axis.title = element_text(size = 18, face = "bold"), 
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+# then get the Original Order as a single one
+orig_samples <- plot_gmat_tib(bind_rows(tib_list[1], .id = "option")) +
+  facet_wrap(~option, ncol = 1) +
+  theme(
+    axis.text.x = element_text(size = 12),
+    axis.title = element_text(size = 18, face = "bold"), 
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+# and now cowplot those together
+top_row <- plot_grid(
+  NULL, orig_samples, NULL,
+  nrow = 1,
+  rel_widths = c(1, 2.5 , 1),
+  labels = c("", "a)", ""),
+  label_x = -0.06,
+  label_size = 30
+)
+
+bottom_row <- plot_grid(
+  facets6, 
+  nrow = 1, 
+  labels = c("b)"), 
+  label_x = -0.004, 
+  label_size = 30,
+  label_y = 1.1
+)
+
+permy_plot <- plot_grid(top_row, bottom_row, ncol = 1, rel_heights = c(1.4, 2))
+
+# mac preview antialiases the hell out of the PDF.  What BS
+#ggsave(permy_plot, filename = "results/figures/permutations-plot.pdf", width = 18, height = 12)
+
+# Try the PNG
+#ggsave(permy_plot, filename = "results/figures/permutations-plot.png", width = 18, height = 12)
+
+permy_plot
+
